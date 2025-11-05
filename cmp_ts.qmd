@@ -14,16 +14,25 @@ echo: false
 library(dplyr)
 library(ggplot2)
 library(here)
+#library(leaflet)
 library(lubridate)
 library(plotly)
+library(RColorBrewer)
 library(sensorstrings)
 library(shiny)
+
+source(here("functions/add_map_layers.R"))
 
 theme_set(theme_light())
 
 dat_all <- readRDS(here("data/cmp_time_series_dates.RDS"))
 dat_gap <- readRDS(here("data/cmp_time_series_gaps.RDS")) %>% 
   mutate(gap_length_weeks = round(gap_length_days / 7))
+st_locations <- readRDS(here("data/cmp_station_locations.RDS"))
+
+get_pal <- colorRampPalette(brewer.pal(8, "Dark2"))
+county_pal <- get_pal(length(unique(dat_all$county)))
+
 ```
 
 
@@ -48,26 +57,25 @@ uiOutput("station_dropdown")
 
 ```
 
-# Station & Depth {height=100%}
+# Station Map
+```{r}
+#leafletOutput("fig_map")
+```
 
+
+# County 
+```{r}
+#| class-output: scrollable-plot
+
+plotlyOutput("fig_county")
+```
+
+
+# Station & Depth 
+
+## {height=100%}
 ```{r}
 plotlyOutput("fig_station_depth")
-```
-
-
-
-# Overview {scrolling="true" toc="true"}
-
-## Output
-
-```{r}
-tableOutput("check")
-```
-
-## Output 2
-
-```{r}
-tableOutput("check2")
 ```
 
 ```{r}
@@ -121,7 +129,8 @@ dat_station <- reactive({
     sel_station <- unique(dat_county()$station) 
   } else { sel_station <- input$selected_station }
   
-  dat_station <- dat_county() %>% filter(station %in% sel_station)
+  dat_station <- dat_county() %>% 
+    filter(station %in% sel_station)
   
   return(dat_station)
 })
@@ -160,7 +169,98 @@ output$station_dropdown <- renderUI({
 #   )
 # })
 
-# figures
+# # figures
+# output$fig_map <- renderLeaflet({
+#   
+#   st_dat <- st_locations %>% 
+#     inner_join(
+#       dat_station(), 
+#       by = join_by(county, station, sensor_depth_at_low_tide_m)
+#     ) %>% 
+#     ss_convert_depth_to_ordered_factor() %>% 
+#       mutate(
+#     popup = paste(
+#       "station: ", station, "</br>",
+#       "depth_m: ", sensor_depth_at_low_tide_m
+#     )
+#   )
+#   
+#   depth_pal <- colorFactor(
+#     palette = ss_get_colour_palette(st_dat),
+#     domain = levels(st_dat$sensor_depth_at_low_tide_m)
+#   )
+#   st_map <- split(st_dat, st_dat$sensor_depth_at_low_tide_m)
+#   
+#   m <- leaflet() %>%
+#     addProviderTiles(providers$CartoDB.Positron) %>%
+#     add_map_layers(
+#       map_dat = st_map,
+#       popup = ~popup,
+#       size = 3,
+#       map_pal = ~depth_pal(sensor_depth_at_low_tide_m)
+#     ) %>%
+#     addScaleBar(
+#       position = "bottomright",
+#       options = scaleBarOptions(imperial = FALSE)
+#     ) %>%
+#     addLayersControl(
+#       overlayGroups = levels(st_dat$sensor_depth_at_low_tide_m),
+#       options = layersControlOptions(collapsed = FALSE),
+#       position = "bottomleft",
+#     )
+#   
+#   return(m)
+# })
+
+
+
+output$fig_county <- renderPlotly({
+  
+  dat_plot <- dat_station() %>%
+    group_by(county, station) %>%
+    summarise(
+      start_date = min(start_date),
+      end_date = max(end_date)
+    ) %>%
+    ungroup() %>%
+    mutate(county = ordered(county, levels = sort(unique(dat_all$county))))
+  
+  p <- ggplot(dat_plot, aes(colour = county)) +
+    geom_segment(
+      aes(
+        x = start_date, xend = end_date, y = station, yend = station,
+        text = paste(
+          "station: ", station, "\n",
+          "start_date: ", as_date(start_date), "\n",
+          "end_date: ", as_date(end_date))
+      ), linewidth = 4
+    ) +
+    scale_y_discrete(limits = rev) +
+    scale_colour_manual(values = county_pal, drop = FALSE) +
+    facet_wrap(~county, scales = "free_y", ncol = 2) +
+    theme(
+      legend.position = "none",
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.border = element_rect(colour = "gray20"),
+      strip.background = element_rect(colour = "gray20", fill = "gray40"),
+      panel.spacing.x = unit(-1, "lines")
+    ) 
+  
+  p <- ggplotly(p, tooltip = "text", height = 500) %>% 
+    config(
+      modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
+      displaylogo = FALSE,
+      toImageButtonOptions = list(
+        format = "png",
+        filename = "cmar_county_time_series",
+        width = 1200, height = 700
+      ))
+  
+  return(p)
+  
+})
+
 output$fig_station_depth <- renderPlotly({
   
   dat_plot <- dat_station() %>%
@@ -198,27 +298,19 @@ output$fig_station_depth <- renderPlotly({
       strip.background = element_rect(colour = "gray20", fill = "gray40")
     ) 
   
-  
-  p <- ggplotly(p, tooltip = "text")
-  
+  p <- ggplotly(p, tooltip = "text") %>% 
+    config(
+      modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
+      displaylogo = FALSE,
+      toImageButtonOptions = list(
+        format = "png",
+        filename = "cmar_station_depth_time_series",
+        width = 1200, height = 700
+      ))
+
   return(p)
-  
-  # ggplotly(p, tooltip = "text", source = "plot2") %>%
-  #   config(
-  #     modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
-  #     displaylogo = FALSE,
-  #     toImageButtonOptions = list(
-  #       format = "png",
-  #       filename = "temperature_validation",
-  #       width = 900, height = 500
-  #     ))  
 
-  
 })
-
-
-output$check <- renderTable(dat_county())
-output$check2 <- renderTable(dat_station())
 
 ```
 
