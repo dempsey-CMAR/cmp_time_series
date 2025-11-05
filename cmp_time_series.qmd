@@ -1,0 +1,227 @@
+---
+title: "CMAR Coastal Monitoring Program"
+format: 
+  dashboard:
+    orientation: columns
+server: shiny
+echo: false
+---
+
+```{r}
+#| context: setup
+#| include: false
+
+library(dplyr)
+library(ggplot2)
+library(here)
+library(lubridate)
+library(plotly)
+library(sensorstrings)
+library(shiny)
+
+theme_set(theme_light())
+
+dat_all <- readRDS(here("data/cmp_time_series_dates.RDS"))
+dat_gap <- readRDS(here("data/cmp_time_series_gaps.RDS")) %>% 
+  mutate(gap_length_weeks = round(gap_length_days / 7))
+```
+
+
+# Filters {.sidebar width=20% height=100%}
+
+```{r}
+#| title: Select
+
+w <- '95%'
+
+sliderInput(
+  inputId = "max_data_gap",
+  "Select Max Accetable Data Gap (weeks)",
+  min = 0, max = round(max(dat_gap$gap_length_weeks), digits = -1), 
+  value = round(max(dat_gap$gap_length_weeks), digits = -1), 
+  step = 1, width = w, ticks = TRUE
+)
+
+uiOutput("county_dropdown")
+uiOutput("station_dropdown")
+#uiOutput("depth_checkbox")
+
+```
+
+# Station & Depth {height=100%}
+
+```{r}
+plotlyOutput("fig_station_depth")
+```
+
+
+
+# Overview {scrolling="true" toc="true"}
+
+## Output
+
+```{r}
+tableOutput("check")
+```
+
+## Output 2
+
+```{r}
+tableOutput("check2")
+```
+
+```{r}
+#| context: server
+
+# # logic
+# dat <- reactive({
+#   req(input$max_data_gap)
+# 
+#   gaps_large <- dat_gap %>%
+#     filter(gap_length_weeks > input$max_data_gap)
+# 
+#   dat_filt <- dat_all %>%
+#     anti_join(
+#       gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
+#     )
+# 
+#   return(dat_filt)
+# })
+
+# logic
+gaps_large <- reactive({
+  req(input$max_data_gap)
+
+  gaps_large <- dat_gap %>%
+    filter(gap_length_weeks > input$max_data_gap)
+
+  return(gaps_large)
+})
+
+dat_county <- reactive({
+  req(input$selected_county)
+  
+  if ("All" %in% input$selected_county) { 
+    sel_county <- unique(dat_all$county) 
+  } else { sel_county <- input$selected_county }
+  
+  dat_county <- dat_all %>% 
+    filter(county %in% sel_county) %>%
+    anti_join(
+      gaps_large(), by = join_by(county, station, sensor_depth_at_low_tide_m)
+    )
+  
+  return(dat_county)
+})
+
+dat_station <- reactive({
+  req(input$selected_station)
+  
+  if ("All" %in% input$selected_station) { 
+    sel_station <- unique(dat_county()$station) 
+  } else { sel_station <- input$selected_station }
+  
+  dat_station <- dat_county() %>% filter(station %in% sel_station)
+  
+  return(dat_station)
+})
+
+# dat_depth <- reactive({
+#   req(input$selected_depth)
+#   
+#   dat_depth <- dat_station() %>% 
+#     filter(sensor_depth_at_low_tide_m %in% input$selected_depth)
+#   
+#   return(dat_depth)
+# })
+
+# UI
+output$county_dropdown <- renderUI({
+  selectInput(
+    inputId = "selected_county", "Select County", selected = "Annapolis",
+    choices = c("All", sort(unique(dat_all$county))),
+    multiple = TRUE
+  )
+})
+
+output$station_dropdown <- renderUI({
+  selectInput(
+    inputId = "selected_station", "Select Station(s)", selected = "All",
+    choices = c("All", sort(unique(dat_county()$station))),
+    multiple = TRUE
+  )
+})
+
+# output$depth_checkbox <- renderUI({
+#   checkboxGroupInput(
+#     inputId = "selected_depth", "Select Depth(s)",
+#     selected = sort(unique(dat_station()$sensor_depth_at_low_tide_m)),
+#     choices = sort(unique(dat_station()$sensor_depth_at_low_tide_m))
+#   )
+# })
+
+# figures
+output$fig_station_depth <- renderPlotly({
+  
+  dat_plot <- dat_station() %>%
+    ss_convert_depth_to_ordered_factor()
+
+  #dat <- dat_depth() %>% 
+    # ss_convert_depth_to_ordered_factor()
+      
+  p <- ggplot(dat_plot, aes(col = sensor_depth_at_low_tide_m)) +
+    geom_segment(
+      aes(
+        x = start_date, xend = end_date,
+        y = sensor_depth_at_low_tide_m, yend = sensor_depth_at_low_tide_m,
+        text = paste(
+          "station: ", station, "\n",
+          "depth_m: ", sensor_depth_at_low_tide_m, "\n",
+          "start_date: ", as_date(start_date), "\n",
+          "end_date: ", as_date(end_date)
+        )
+      ), linewidth = 4
+    ) +
+    scale_y_discrete(
+      limits = rev(levels(dat_plot$sensor_depth_at_low_tide_m))
+    ) +
+    scale_colour_manual("Depth (m)", values = ss_get_colour_palette(dat_plot)) +
+    facet_wrap(~station) +
+    theme(
+      axis.title.x = element_blank(),
+      panel.spacing.x = unit(0, "lines"),
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.border = element_rect(colour = "gray20"),
+      strip.background = element_rect(colour = "gray20", fill = "gray40")
+    ) 
+  
+  
+  p <- ggplotly(p, tooltip = "text")
+  
+  return(p)
+  
+  # ggplotly(p, tooltip = "text", source = "plot2") %>%
+  #   config(
+  #     modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
+  #     displaylogo = FALSE,
+  #     toImageButtonOptions = list(
+  #       format = "png",
+  #       filename = "temperature_validation",
+  #       width = 900, height = 500
+  #     ))  
+
+  
+})
+
+
+output$check <- renderTable(dat_county())
+output$check2 <- renderTable(dat_station())
+
+```
+
+
+
+
