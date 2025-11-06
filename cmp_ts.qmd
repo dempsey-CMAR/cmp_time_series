@@ -11,10 +11,13 @@ echo: false
 #| context: setup
 #| include: false
 
+# DO NOT UPDATE GGPLOT OR ELSE THE PANEL OUTLINES WILL BE LOST
+
 library(dplyr)
 library(ggplot2)
 library(here)
-#library(leaflet)
+library(htmlwidgets)
+library(leaflet)
 library(lubridate)
 library(plotly)
 library(RColorBrewer)
@@ -22,6 +25,7 @@ library(sensorstrings)
 library(shiny)
 
 source(here("functions/add_map_layers.R"))
+source(here("functions/helpers.R"))
 
 theme_set(theme_light())
 
@@ -59,7 +63,7 @@ uiOutput("station_dropdown")
 
 # Station Map
 ```{r}
-#leafletOutput("fig_map")
+leafletOutput("fig_map")
 ```
 
 
@@ -73,8 +77,9 @@ plotlyOutput("fig_county")
 
 # Station & Depth 
 
-## {height=100%}
 ```{r}
+#| class-output: scrollable-plot
+
 plotlyOutput("fig_station_depth")
 ```
 
@@ -144,6 +149,7 @@ dat_station <- reactive({
 #   return(dat_depth)
 # })
 
+
 # UI
 output$county_dropdown <- renderUI({
   selectInput(
@@ -169,52 +175,62 @@ output$station_dropdown <- renderUI({
 #   )
 # })
 
-# # figures
-# output$fig_map <- renderLeaflet({
-#   
-#   st_dat <- st_locations %>% 
-#     inner_join(
-#       dat_station(), 
-#       by = join_by(county, station, sensor_depth_at_low_tide_m)
-#     ) %>% 
-#     ss_convert_depth_to_ordered_factor() %>% 
-#       mutate(
-#     popup = paste(
-#       "station: ", station, "</br>",
-#       "depth_m: ", sensor_depth_at_low_tide_m
-#     )
-#   )
-#   
-#   depth_pal <- colorFactor(
-#     palette = ss_get_colour_palette(st_dat),
-#     domain = levels(st_dat$sensor_depth_at_low_tide_m)
-#   )
-#   st_map <- split(st_dat, st_dat$sensor_depth_at_low_tide_m)
-#   
-#   m <- leaflet() %>%
-#     addProviderTiles(providers$CartoDB.Positron) %>%
-#     add_map_layers(
-#       map_dat = st_map,
-#       popup = ~popup,
-#       size = 3,
-#       map_pal = ~depth_pal(sensor_depth_at_low_tide_m)
-#     ) %>%
-#     addScaleBar(
-#       position = "bottomright",
-#       options = scaleBarOptions(imperial = FALSE)
-#     ) %>%
-#     addLayersControl(
-#       overlayGroups = levels(st_dat$sensor_depth_at_low_tide_m),
-#       options = layersControlOptions(collapsed = FALSE),
-#       position = "bottomleft",
-#     )
-#   
-#   return(m)
-# })
+# figures
+output$fig_map <- renderLeaflet({
+
+  st_dat <- st_locations %>%
+    inner_join(
+      dat_station(),
+      by = join_by(county, station, sensor_depth_at_low_tide_m)
+    ) %>%
+    ss_convert_depth_to_ordered_factor() %>%
+      mutate(
+    popup = paste(
+      "station: ", station, "</br>",
+      "depth_m: ", sensor_depth_at_low_tide_m
+    )
+  )
+
+  depth_pal <- colorFactor(
+    palette = ss_get_colour_palette(st_dat),
+    domain = levels(st_dat$sensor_depth_at_low_tide_m)
+  )
+  st_map <- split(st_dat, st_dat$sensor_depth_at_low_tide_m)
+
+  m <- leaflet() %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    add_map_layers(
+      map_dat = st_map,
+      popup = ~popup,
+      size = 3,
+      map_pal = ~depth_pal(sensor_depth_at_low_tide_m)
+    ) %>%
+    addScaleBar(
+      position = "bottomright",
+      options = scaleBarOptions(imperial = FALSE)
+    ) %>%
+    addLayersControl(
+      overlayGroups = levels(st_dat$sensor_depth_at_low_tide_m),
+      options = layersControlOptions(collapsed = FALSE),
+      position = "bottomleft"
+    ) %>% 
+      htmlwidgets::onRender("
+        function() {
+            $('.leaflet-control-layers-overlays').prepend('<label style=\"text-align:center\">Sensor Depth (m)</label>');
+        }
+    ")
+
+  return(m)
+})
 
 
 
 output$fig_county <- renderPlotly({
+  
+  # better to use dat_station here than input$county because dat_station() already
+  # dealt with the "All" option
+  county_vec <- unique(dat_station()$county)
+  h <- get_county_fig_height(county_vec)
   
   dat_plot <- dat_station() %>%
     group_by(county, station) %>%
@@ -224,7 +240,7 @@ output$fig_county <- renderPlotly({
     ) %>%
     ungroup() %>%
     mutate(county = ordered(county, levels = sort(unique(dat_all$county))))
-  
+
   p <- ggplot(dat_plot, aes(colour = county)) +
     geom_segment(
       aes(
@@ -237,7 +253,7 @@ output$fig_county <- renderPlotly({
     ) +
     scale_y_discrete(limits = rev) +
     scale_colour_manual(values = county_pal, drop = FALSE) +
-    facet_wrap(~county, scales = "free_y", ncol = 2) +
+    facet_wrap(~county, scales = "free_y", ncol = 1) +
     theme(
       legend.position = "none",
       axis.title.x = element_blank(),
@@ -247,27 +263,28 @@ output$fig_county <- renderPlotly({
       panel.spacing.x = unit(-1, "lines")
     ) 
   
-  p <- ggplotly(p, tooltip = "text", height = 500) %>% 
+  p <- ggplotly(p, tooltip = "text", height = h) %>% 
     config(
       modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
       displaylogo = FALSE,
       toImageButtonOptions = list(
         format = "png",
         filename = "cmar_county_time_series",
-        width = 1200, height = 700
+        width = 1200, height = h
       ))
   
   return(p)
-  
 })
 
 output$fig_station_depth <- renderPlotly({
   
+  # better to use dat_station here than input$county because dat_station() already
+  # dealt with the "All" option
+  station_vec <- unique(dat_station()$station)
+  h <- get_station_fig_height(station_vec)
+
   dat_plot <- dat_station() %>%
     ss_convert_depth_to_ordered_factor()
-
-  #dat <- dat_depth() %>% 
-    # ss_convert_depth_to_ordered_factor()
       
   p <- ggplot(dat_plot, aes(col = sensor_depth_at_low_tide_m)) +
     geom_segment(
@@ -298,14 +315,14 @@ output$fig_station_depth <- renderPlotly({
       strip.background = element_rect(colour = "gray20", fill = "gray40")
     ) 
   
-  p <- ggplotly(p, tooltip = "text") %>% 
+  p <- ggplotly(p, tooltip = "text", height = h) %>% 
     config(
       modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
       displaylogo = FALSE,
       toImageButtonOptions = list(
         format = "png",
         filename = "cmar_station_depth_time_series",
-        width = 1200, height = 700
+        width = 1200, height = h
       ))
 
   return(p)
