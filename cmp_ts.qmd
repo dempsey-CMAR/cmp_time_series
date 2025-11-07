@@ -16,6 +16,9 @@ echo: false
 # https://stackoverflow.com/questions/79771972/why-is-editing-the-panel-border-not-working-inside-ggplotly-wrapper
 # issue to submitted to ggplot2 and ggplotly
 
+# Can't deploy
+# https://forum.posit.co/t/shinyapps-support-for-r-4-5-0-ubuntu-24-04-jammy/199608
+
 library(DT)
 library(dplyr)
 library(ggplot2)
@@ -45,7 +48,6 @@ county_pal <- get_pal(length(unique(dat_all$county)))
 
 ```
 
-
 # Filters {.sidebar width=20% height=100%}
 
 ```{r}
@@ -70,8 +72,14 @@ sliderInput(
 )
 
 uiOutput("county_dropdown")
+```
+
+The Station and Depth dropdowns will be reset when the inputs above are changed.
+I could fix this, BUT then the station and depth options would not update based on the previous selections.
+
+```{r}
 uiOutput("station_dropdown")
-#uiOutput("depth_checkbox")
+uiOutput("depth_dropdown")
 
 ```
 
@@ -90,6 +98,7 @@ plotlyOutput("fig_county")
 # Station & Depth 
 ```{r}
 #| class-output: scrollable-plot
+#| width: 100%
 
 plotlyOutput("fig_station_depth")
 ```
@@ -98,6 +107,36 @@ plotlyOutput("fig_station_depth")
 ```{r}
 DTOutput("table_station_depth")
 ```
+
+# Read Me
+
+More info to come.
+
+**Inputs**
+
+  - Select Min Time Series Length (weeks): move slider to choose the minimum length of the time series based on the start date and end date of deployment.
+  - Select Max Acceptable Data Gap (weeks): move slider to choose the maximum  acceptable length of a gap in a time series (data from a single station at a single depth).
+  - Select County: choose the county or counties of interest. 
+  - Select Station(s): choose the station(s) of interest. The options update based on the inputs above. *The station dropdown will reset to "All" when the inputs above are adjusted.* 
+  - Select Depth(s): choose the depth(s) of interest. The options update based on the inputs above. *The depth dropdown will reset to "All" when the inputs above are adjusted.*
+
+For the dropdown inputs:
+
+  - Click "All" to choose all options. 
+  - To remove a selection, click on it and press "delete" on your keyboard.
+  - Make sure to delete "All" before clicking on a different selection or the filter will not be applied.
+
+
+**Tabs**
+
+- Station Map: location of stations with data based on the input criteria. The "Sensor Depth (m)" panel can be used to filter the depths shown on the map. This will not impact the depths shown on any of the other tabs. Note that the depths are not always shown in numeric order.
+- County: chart of when data was collected at each selected station and county, regardless of depth. 
+- Station & Depth: chart of when data was collected at each selected station and depth. The legend on the right can be used to filter the depths show on the chart. This will not impact any of the other tabs.
+- Download Table: shows the time series corresponding to the input criteria, including the start and end dates and length. Can be downloaded by clicking the "CSV" button in the top left.
+
+**Known Issues**
+
+- If the inputs result in no data to plot, the Station Map and figures will freeze on the last version of the figure *with no error*. However, the Download Table will display the message "No data available in table." If the figures are not behaving as expected, check the Download Table to see if there is anything to plot.
 
 
 ```{r}
@@ -138,15 +177,18 @@ dat_station <- reactive({
   return(dat_station)
 })
 
-# dat_depth <- reactive({
-#   req(input$selected_depth)
-#   
-#   dat_depth <- dat_station() %>% 
-#     filter(sensor_depth_at_low_tide_m %in% input$selected_depth)
-#   
-#   return(dat_depth)
-# })
+dat_depth <- reactive({
+  req(input$selected_depth)
+  
+  if ("All" %in% input$selected_depth) { 
+    sel_depth <- unique(dat_station()$sensor_depth_at_low_tide_m) 
+  } else { sel_depth <- input$selected_depth }
 
+  dat_depth <- dat_station() %>%
+    filter(sensor_depth_at_low_tide_m %in% sel_depth)
+
+  return(dat_depth)
+})
 
 # UI
 output$county_dropdown <- renderUI({
@@ -165,50 +207,46 @@ output$station_dropdown <- renderUI({
   )
 })
 
-# output$depth_checkbox <- renderUI({
-#   checkboxGroupInput(
-#     inputId = "selected_depth", "Select Depth(s)",
-#     selected = sort(unique(dat_station()$sensor_depth_at_low_tide_m)),
-#     choices = sort(unique(dat_station()$sensor_depth_at_low_tide_m))
-#   )
-# })
+output$depth_dropdown <- renderUI({
+  selectInput(
+    inputId = "selected_depth", "Select Depth(s)", selected = "All",
+    choices = c("All", sort(unique(dat_station()$sensor_depth_at_low_tide_m))),
+    multiple = TRUE
+  )
+})
 
 output$check_data <- renderTable({
   validate(
-    need(nrow(dat_station()) > 0, "No stations to map. Please adjust filters.")
+    need(nrow(dat_depth()) > 0, "No stations to map. Please adjust filters.")
   )
   
-  dat_station()
+  dat_depth()
 })
 
 # figures
 output$fig_map <- renderLeaflet({
   validate(
-    need(nrow(dat_station()) > 0, "No stations to map. Please adjust filters.")
+    need(nrow(dat_depth()) > 0, "No stations to map. Please adjust filters.")
   )
 
   st_dat <- st_locations %>%
     inner_join(
-      dat_station(),
+      dat_depth(),
       by = join_by(county, station, sensor_depth_at_low_tide_m)
     ) %>%
-    ss_convert_depth_to_ordered_factor() %>%
-      mutate(
-    popup = paste(
-      "station: ", station, "</br>",
-      "depth_m: ", sensor_depth_at_low_tide_m
+    mutate(
+      popup = paste(
+        "station: ", station, "</br>",
+        "depth_m: ", sensor_depth_at_low_tide_m)
     )
-  )
-
   
-  depth_pal <- colorFactor(
+  depth_pal <- colorNumeric(
     palette = ss_get_colour_palette(st_dat),
-    domain = levels(st_dat$sensor_depth_at_low_tide_m)
+    domain = unique(st_dat$sensor_depth_at_low_tide_m)
   )
-  # won't need this or add_map_layers when depth filter added
   st_map <- split(st_dat, st_dat$sensor_depth_at_low_tide_m)
 
-  m <- leaflet() %>%
+  leaflet() %>%
     addProviderTiles(providers$CartoDB.Positron) %>%
     add_map_layers(
       map_dat = st_map,
@@ -221,31 +259,28 @@ output$fig_map <- renderLeaflet({
       options = scaleBarOptions(imperial = FALSE)
     ) %>%
     addLayersControl(
-      overlayGroups = levels(st_dat$sensor_depth_at_low_tide_m),
+      overlayGroups = unique(st_dat$sensor_depth_at_low_tide_m),
       options = layersControlOptions(collapsed = FALSE),
       position = "bottomleft"
-    ) %>% 
-      htmlwidgets::onRender("
-        function() {
-            $('.leaflet-control-layers-overlays').prepend('<label style=\"text-align:center\">Sensor Depth (m)</label>');
-        }
-    ")
-
-  return(m)
+    ) %>%
+    htmlwidgets::onRender(
+      "function() {$('.leaflet-control-layers-overlays').
+    prepend('<label style=\"text-align:center\">Sensor Depth (m)</label>');}"
+    )
 })
 
 
 output$fig_county <- renderPlotly({
   # validate(
-  #   need(nrow(dat_station()) > 0, "No data to plot. Please adjust filters.")
+  #   need(nrow(dat_depth()) > 0, "No data to plot. Please adjust filters.")
   # )
   
-  # better to use dat_station here than input$county because dat_station() already
+  # better to use dat_depth here than input$county because dat_depth() already
   # dealt with the "All" option
-  county_vec <- unique(dat_station()$county)
+  county_vec <- unique(dat_depth()$county)
   h <- get_county_fig_height(county_vec)
 
-  dat_plot <- dat_station() %>%
+  dat_plot <- dat_depth() %>%
     mutate(county = ordered(county, levels = sort(unique(dat_all$county))))
 
   p <- ggplot(dat_plot, aes(colour = county)) +
@@ -284,12 +319,12 @@ output$fig_county <- renderPlotly({
 
 output$fig_station_depth <- renderPlotly({
   
-  # better to use dat_station here than input$county because dat_station() already
+  # better to use dat_depth here than input$county because dat_depth() already
   # dealt with the "All" option
-  station_vec <- unique(dat_station()$station)
+  station_vec <- unique(dat_depth()$station)
   h <- get_station_fig_height(station_vec)
   
-  dat_plot <- dat_station() %>%
+  dat_plot <- dat_depth() %>%
     ss_convert_depth_to_ordered_factor()
   
   p <- ggplot(dat_plot, aes(col = sensor_depth_at_low_tide_m)) +
@@ -333,7 +368,7 @@ output$fig_station_depth <- renderPlotly({
 })
 
 output$table_station_depth <- renderDT({
-  dat_station() %>% 
+  dat_depth() %>% 
     mutate(start_date = format(start_date), end_date = format(end_date)) %>% 
     datatable(
       rownames = FALSE,
