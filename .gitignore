@@ -7,3 +7,5 @@
 *.html
 
 data/
+*_files/
+rsconnect/
