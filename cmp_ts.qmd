@@ -13,7 +13,10 @@ echo: false
 
 # DO NOT UPDATE GGPLOT OR ELSE THE PANEL OUTLINES WILL BE LOST
 #remotes::install_version("ggplot2", version = "3.5.2", repos = "http://cran.us.r-project.org")
+# https://stackoverflow.com/questions/79771972/why-is-editing-the-panel-border-not-working-inside-ggplotly-wrapper
+# issue to submitted to ggplot2 and ggplotly
 
+library(DT)
 library(dplyr)
 library(ggplot2)
 library(here)
@@ -37,18 +40,6 @@ dat_gap <- readRDS(here("data/cmp_time_series_gaps.RDS")) %>%
 
 st_locations <- readRDS(here("data/cmp_station_locations.RDS"))
 
-ts_length <- dat_all %>% 
-  group_by(county, station, sensor_depth_at_low_tide_m) %>% 
-  summarise(
-   depl_start = min(start_date), depl_end = max(end_date)
-  ) %>% 
-  ungroup() %>% 
-  mutate(
-    ts_length_weeks = difftime(depl_end, depl_start, units = "weeks"),
-    ts_length_weeks = round(as.numeric(ts_length_weeks), digits = 2)
-  ) %>% 
-  select(-c(depl_start, depl_end))
-
 get_pal <- colorRampPalette(brewer.pal(8, "Dark2"))
 county_pal <- get_pal(length(unique(dat_all$county)))
 
@@ -65,8 +56,8 @@ w <- '95%'
 sliderInput(
   inputId = "min_ts_length",
   "Select Min Time Series Length (weeks)",
-  min = 0, max = round(max(ts_length$ts_length_weeks), digits = -1), 
-  value = round(min(ts_length$ts_length_weeks), digits = -1), 
+  min = 0, max = round(max(dat_all$ts_length_weeks), digits = -1), 
+  value = round(min(dat_all$ts_length_weeks), digits = -1), 
   step = 1, width = w, ticks = TRUE
 )
 
@@ -84,17 +75,10 @@ uiOutput("station_dropdown")
 
 ```
 
-# Check
-```{r}
-tableOutput("check_data")
-```
-
-
 # Station Map
 ```{r}
 leafletOutput("fig_map")
 ```
-
 
 # County 
 ```{r}
@@ -103,37 +87,21 @@ leafletOutput("fig_map")
 plotlyOutput("fig_county")
 ```
 
-
 # Station & Depth 
-
 ```{r}
 #| class-output: scrollable-plot
 
 plotlyOutput("fig_station_depth")
 ```
 
+# Download Table
+```{r}
+DTOutput("table_station_depth")
+```
+
+
 ```{r}
 #| context: server
-
-# logic
-# ts_short <- reactive({
-#   req(input$min_ts_length)
-# 
-#   ts_short <- ts_length %>%
-#     filter(ts_length_weeks < input$min_ts_length)
-# 
-#   return(ts_short)
-# })
-
-# 
-# gaps_large <- reactive({
-#   req(input$max_data_gap)
-# 
-#   gaps_large <- dat_gap %>%
-#     filter(gap_length_weeks > input$max_data_gap)
-# 
-#   return(gaps_large)
-# })
 
 dat_county <- reactive({
   req(input$selected_county)
@@ -145,34 +113,27 @@ dat_county <- reactive({
   dat_county <- dat_all %>% 
     filter(county %in% sel_county) 
   
-  return(dat_county)
+  return(dat_county) # use this to make the options for station_dropdown
 })
 
 dat_station <- reactive({
   req(input$selected_station)
   
-  ts_short <- ts_length %>%
-    filter(ts_length_weeks < input$min_ts_length)
-  
   gaps_large <- dat_gap %>%
     filter(gap_length_weeks > input$max_data_gap)
   
-  if ("All" %in% input$selected_county) { 
-    sel_county <- unique(dat_all$county) 
-  } else { sel_county <- input$selected_county }
-  
   if ("All" %in% input$selected_station) { 
-    sel_station <- unique(dat_all$station) 
+    sel_station <- unique(dat_county()$station) 
   } else { sel_station <- input$selected_station }
   
-  dat_station <- dat_all %>% 
-    filter(county %in% sel_county, station %in% sel_station) %>%
+  dat_station <- dat_county() %>% 
+    filter(
+      station %in% sel_station,
+      ts_length_weeks >= input$min_ts_length
+    ) %>% 
     anti_join(
-      ts_short, by = join_by(county, station, sensor_depth_at_low_tide_m)
-    ) #%>%
-    # anti_join(
-    #   gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
-    # )
+      gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
+    )
   
   return(dat_station)
 })
@@ -216,7 +177,7 @@ output$check_data <- renderTable({
   validate(
     need(nrow(dat_station()) > 0, "No stations to map. Please adjust filters.")
   )
-
+  
   dat_station()
 })
 
@@ -239,10 +200,12 @@ output$fig_map <- renderLeaflet({
     )
   )
 
+  
   depth_pal <- colorFactor(
     palette = ss_get_colour_palette(st_dat),
     domain = levels(st_dat$sensor_depth_at_low_tide_m)
   )
+  # won't need this or add_map_layers when depth filter added
   st_map <- split(st_dat, st_dat$sensor_depth_at_low_tide_m)
 
   m <- leaflet() %>%
@@ -250,7 +213,7 @@ output$fig_map <- renderLeaflet({
     add_map_layers(
       map_dat = st_map,
       popup = ~popup,
-      size = 3,
+      size = 4,
       map_pal = ~depth_pal(sensor_depth_at_low_tide_m)
     ) %>%
     addScaleBar(
@@ -272,11 +235,10 @@ output$fig_map <- renderLeaflet({
 })
 
 
-
 output$fig_county <- renderPlotly({
-  validate(
-    need(nrow(dat_station()) > 0, "No data to plot. Please adjust filters.")
-  )
+  # validate(
+  #   need(nrow(dat_station()) > 0, "No data to plot. Please adjust filters.")
+  # )
   
   # better to use dat_station here than input$county because dat_station() already
   # dealt with the "All" option
@@ -284,16 +246,7 @@ output$fig_county <- renderPlotly({
   h <- get_county_fig_height(county_vec)
 
   dat_plot <- dat_station() %>%
-    group_by(county, station) %>%
-    summarise(
-      start_date = min(start_date),
-      end_date = max(end_date)
-    ) %>%
-    ungroup() %>%
     mutate(county = ordered(county, levels = sort(unique(dat_all$county))))
-
-  # apply gap check here again because stations can have data at one depth,
-  # then gap, then another depth (e.g., Ram Island)
 
   p <- ggplot(dat_plot, aes(colour = county)) +
     geom_segment(
@@ -302,7 +255,8 @@ output$fig_county <- renderPlotly({
         text = paste(
           "station: ", station, "\n",
           "start_date: ", as_date(start_date), "\n",
-          "end_date: ", as_date(end_date))
+          "end_date: ", as_date(end_date), "\n",
+          "length_weeks: ", round(ts_length_weeks))
       ), linewidth = 4
     ) +
     scale_y_discrete(limits = rev) +
@@ -326,8 +280,6 @@ output$fig_county <- renderPlotly({
         filename = "cmar_county_time_series",
         width = 1200, height = h
       ))
-  
-  #return(p)
 })
 
 output$fig_station_depth <- renderPlotly({
@@ -349,8 +301,8 @@ output$fig_station_depth <- renderPlotly({
           "station: ", station, "\n",
           "depth_m: ", sensor_depth_at_low_tide_m, "\n",
           "start_date: ", as_date(start_date), "\n",
-          "end_date: ", as_date(end_date)
-        )
+          "end_date: ", as_date(end_date), "\n",
+          "length_weeks: ", round(ts_length_weeks))
       ), linewidth = 4
     ) +
     scale_y_discrete(
@@ -369,7 +321,7 @@ output$fig_station_depth <- renderPlotly({
       strip.background = element_rect(colour = "gray20", fill = "gray40")
     ) 
   
-ggplotly(p, tooltip = "text", height = h) %>% 
+  ggplotly(p, tooltip = "text", height = h) %>% 
     config(
       modeBarButtonsToRemove = list("toggleSpikelines", "autoScale2d"),
       displaylogo = FALSE,
@@ -378,9 +330,24 @@ ggplotly(p, tooltip = "text", height = h) %>%
         filename = "cmar_station_depth_time_series",
         width = 1200, height = h
       ))
-  
- # return(p)
-  
+})
+
+output$table_station_depth <- renderDT({
+  dat_station() %>% 
+    mutate(start_date = format(start_date), end_date = format(end_date)) %>% 
+    datatable(
+      rownames = FALSE,
+      extensions = 'Buttons',
+      options = list(
+        dom = 'Bft',
+        paging = FALSE,
+        searching = TRUE,
+        buttons = list(
+          list(extend = 'csv', title = "station_depth_data_series") 
+        ),
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      )
+    )
 })
 
 ```

@@ -3,11 +3,13 @@
 # dynamic height depending on how many counties selected
 get_county_fig_height <- function(county) {
 
-  h_base <- 300
-
-  #county <- unique(county_station$county)
   n_county <- length(county)
 
+  if(n_county == 0) {
+    warning("no data to plot")
+  }
+
+  h_base <- 300
   if (n_county > 1) {
     h <- h_base * n_county
   }
