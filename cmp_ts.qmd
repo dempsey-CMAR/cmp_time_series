@@ -1,5 +1,5 @@
 ---
-title: "CMAR Coastal Monitoring Program"
+title: "CMAR Coastal Monitoring Program: Data Explorer"
 format: 
   dashboard:
     orientation: columns
@@ -18,6 +18,9 @@ echo: false
 
 # Can't deploy
 # https://forum.posit.co/t/shinyapps-support-for-r-4-5-0-ubuntu-24-04-jammy/199608
+
+# Dynamic UI
+# https://mastering-shiny.org/action-dynamic.html
 
 library(DT)
 library(dplyr)
@@ -72,15 +75,9 @@ sliderInput(
 )
 
 uiOutput("county_dropdown")
-```
 
-The Station and Depth dropdowns will be reset when the inputs above are changed.
-I could fix this, BUT then the station and depth options would not update based on the previous selections.
-
-```{r}
 uiOutput("station_dropdown")
 uiOutput("depth_dropdown")
-
 ```
 
 # Station Map
@@ -145,21 +142,31 @@ For the dropdown inputs:
 dat_county <- reactive({
   req(input$selected_county)
   
+  gaps_large <- dat_gap %>%
+    filter(gap_length_weeks > input$max_data_gap)
+  
   if ("All" %in% input$selected_county) { 
     sel_county <- unique(dat_all$county) 
   } else { sel_county <- input$selected_county }
   
   dat_county <- dat_all %>% 
-    filter(county %in% sel_county) 
+    filter(
+      county %in% sel_county,
+      ts_length_weeks >= input$min_ts_length
+    ) %>%
+    anti_join(
+      gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
+    )
   
   return(dat_county) # use this to make the options for station_dropdown
 })
 
+
 dat_station <- reactive({
   req(input$selected_station)
   
-  gaps_large <- dat_gap %>%
-    filter(gap_length_weeks > input$max_data_gap)
+   # gaps_large <- dat_gap %>%
+   #   filter(gap_length_weeks > input$max_data_gap)
   
   if ("All" %in% input$selected_station) { 
     sel_station <- unique(dat_county()$station) 
@@ -167,14 +174,14 @@ dat_station <- reactive({
   
   dat_station <- dat_county() %>% 
     filter(
-      station %in% sel_station,
-      ts_length_weeks >= input$min_ts_length
-    ) %>% 
-    anti_join(
-      gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
-    )
+      station %in% sel_station)
+    #   ts_length_weeks >= input$min_ts_length
+    # ) %>%
+    # anti_join(
+    #   gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
+    # )
   
-  return(dat_station)
+  return(dat_station) # use this to make the options in the depth dropdown
 })
 
 dat_depth <- reactive({
@@ -183,47 +190,73 @@ dat_depth <- reactive({
   if ("All" %in% input$selected_depth) { 
     sel_depth <- unique(dat_station()$sensor_depth_at_low_tide_m) 
   } else { sel_depth <- input$selected_depth }
-
+  
   dat_depth <- dat_station() %>%
     filter(sensor_depth_at_low_tide_m %in% sel_depth)
-
+  
   return(dat_depth)
 })
 
-# UI
+########################################################
+#### UI ################################################
+########################################################
 output$county_dropdown <- renderUI({
   selectInput(
-    inputId = "selected_county", "Select County", selected = "Annapolis",
+    inputId = "selected_county", "Select County", 
+    selected = "All",
     choices = c("All", sort(unique(dat_all$county))),
     multiple = TRUE
   )
 })
 
+# station dropdown
 output$station_dropdown <- renderUI({
   selectInput(
-    inputId = "selected_station", "Select Station(s)", selected = "All",
-    choices = c("All", sort(unique(dat_county()$station))),
+    inputId = "selected_station", "Select Station(s)", 
+    selected = "All",
+    choices = NULL,
     multiple = TRUE
   )
 })
 
+# update station dropdown
+observeEvent(dat_county(), {
+  if(is.null(input$selected_station)) {
+    selected <- "All"
+  } else selected <- isolate(input$selected_station)
+  
+  choices <- c("All", sort(unique(dat_county()$station)))
+  
+  updateSelectInput(
+    inputId = "selected_station", choices = choices, selected = selected
+  )
+})
+
+# depth dropdown
 output$depth_dropdown <- renderUI({
   selectInput(
-    inputId = "selected_depth", "Select Depth(s)", selected = "All",
-    choices = c("All", sort(unique(dat_station()$sensor_depth_at_low_tide_m))),
-    multiple = TRUE
+    inputId = "selected_depth", "Select Depth(s)", 
+    choices = NULL, multiple = TRUE
   )
 })
 
-output$check_data <- renderTable({
-  validate(
-    need(nrow(dat_depth()) > 0, "No stations to map. Please adjust filters.")
-  )
+# update depth dropdown
+observeEvent(dat_station(), {
   
-  dat_depth()
+  if(is.null(input$selected_depth)) {
+    selected <- "All"
+  } else selected <- isolate(input$selected_depth)
+  
+  choices <- c("All", sort(unique(dat_station()$sensor_depth_at_low_tide_m)))
+  
+  updateSelectInput(
+    inputId = "selected_depth", choices = choices, selected = selected
+  )
 })
 
-# figures
+########################################################
+#### Figures ###########################################
+########################################################
 output$fig_map <- renderLeaflet({
   validate(
     need(nrow(dat_depth()) > 0, "No stations to map. Please adjust filters.")
@@ -255,13 +288,13 @@ output$fig_map <- renderLeaflet({
       map_pal = ~depth_pal(sensor_depth_at_low_tide_m)
     ) %>%
     addScaleBar(
-      position = "bottomright",
+      position = "bottomleft",
       options = scaleBarOptions(imperial = FALSE)
     ) %>%
     addLayersControl(
       overlayGroups = unique(st_dat$sensor_depth_at_low_tide_m),
       options = layersControlOptions(collapsed = FALSE),
-      position = "bottomleft"
+      position = "bottomright"
     ) %>%
     htmlwidgets::onRender(
       "function() {$('.leaflet-control-layers-overlays').
