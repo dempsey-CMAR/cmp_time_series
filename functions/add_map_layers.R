@@ -6,27 +6,27 @@
 ## popup: column of map_dat to use as popup or label
 
 add_map_layers <- function(m, map_dat, map_pal = NULL, popup = NULL, size = 5) {
-  
+
   # m <- leaflet(map_dat) %>%
-  #   addProviderTiles(providers$CartoDB.Positron) 
-  
+  #   addProviderTiles(providers$CartoDB.Positron)
+
   names(map_dat) %>%
     purrr::walk(function(x) {
       m <<- m %>%
         addCircleMarkers(
           data = map_dat[[x]],
           group = x,
-          
+
           fillColor = map_pal,
           popup = popup,
           lng = ~longitude, lat = ~latitude,
-          
+
           weight = 1,
           color = "black",
-          fillOpacity = 0.75,
+          fillOpacity = 1,
           radius = size
         )
-    }) 
-  
+    })
+
   m
 }
