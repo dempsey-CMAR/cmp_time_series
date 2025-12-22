@@ -39,7 +39,11 @@ source(here("functions/helpers.R"))
 
 theme_set(theme_light())
 
-dat_all <- readRDS(here("data/cmp_time_series_dates.RDS"))
+dat_all <- readRDS(here("data/cmp_time_series_dates.RDS")) %>% 
+  mutate(
+    start_year = year(start_date),
+    end_year = year(end_date)
+  )
 
 dat_gap <- readRDS(here("data/cmp_time_series_gaps.RDS")) %>% 
   mutate(gap_length_weeks = round(gap_length_days / 7))
@@ -54,16 +58,26 @@ county_pal <- get_pal(length(unique(dat_all$county)))
 # Filters {.sidebar width=20% height=100%}
 
 ```{r}
-#| title: Select
 
 w <- '95%'
 
 sliderInput(
   inputId = "min_ts_length",
   "Select Min Time Series Length (weeks)",
-  min = 0, max = round(max(dat_all$ts_length_weeks), digits = -1), 
+  min = 0, 
+  max = round(max(dat_all$ts_length_weeks), digits = -1), 
   value = round(min(dat_all$ts_length_weeks), digits = -1), 
   step = 1, width = w, ticks = TRUE
+)
+
+sliderInput(
+  inputId = "ts_years",
+  "Select Start Year",
+  min = min(dat_all$start_year),
+  max = max(dat_all$end_year),
+  value = min(dat_all$start_year),
+ # value = c(min(dat_all$start_year), max(dat_all$end_year)),
+  step = 1, width = w, ticks = TRUE, sep = ""
 )
 
 sliderInput(
@@ -112,10 +126,11 @@ More info to come.
 **Inputs**
 
   - Select Min Time Series Length (weeks): move slider to choose the minimum length of the time series based on the start date and end date of deployment.
+  - Select Start Year: move slider to choose the minimum start year. Time series with a start year greater than or equal to the selected value will be kept.
   - Select Max Acceptable Data Gap (weeks): move slider to choose the maximum  acceptable length of a gap in a time series (data from a single station at a single depth).
   - Select County: choose the county or counties of interest. 
-  - Select Station(s): choose the station(s) of interest. The options update based on the inputs above. *The station dropdown will reset to "All" when the inputs above are adjusted.* 
-  - Select Depth(s): choose the depth(s) of interest. The options update based on the inputs above. *The depth dropdown will reset to "All" when the inputs above are adjusted.*
+  - Select Station(s): choose the station(s) of interest. The options update based on the inputs above.  
+  - Select Depth(s): choose the depth(s) of interest. The options update based on the inputs above. 
 
 For the dropdown inputs:
 
@@ -128,7 +143,7 @@ For the dropdown inputs:
 
 - Station Map: location of stations with data based on the input criteria. The "Sensor Depth (m)" panel can be used to filter the depths shown on the map. This will not impact the depths shown on any of the other tabs. Note that the depths are not always shown in numeric order.
 - County: chart of when data was collected at each selected station and county, regardless of depth. 
-- Station & Depth: chart of when data was collected at each selected station and depth. The legend on the right can be used to filter the depths show on the chart. This will not impact any of the other tabs.
+- Station & Depth: chart of when data was collected at each selected station and depth. It is recommended to filter before clicking on this tab to reduce the number of panels. The legend on the right can be used to filter the depths shown on the chart. This will not impact any of the other tabs.
 - Download Table: shows the time series corresponding to the input criteria, including the start and end dates and length. Can be downloaded by clicking the "CSV" button in the top left.
 
 **Known Issues**
@@ -152,6 +167,8 @@ dat_county <- reactive({
   dat_county <- dat_all %>% 
     filter(
       county %in% sel_county,
+      start_year >= input$ts_years[1],
+    #  end_year <= input$ts_years[2],
       ts_length_weeks >= input$min_ts_length
     ) %>%
     anti_join(
@@ -164,10 +181,7 @@ dat_county <- reactive({
 
 dat_station <- reactive({
   req(input$selected_station)
-  
-   # gaps_large <- dat_gap %>%
-   #   filter(gap_length_weeks > input$max_data_gap)
-  
+
   if ("All" %in% input$selected_station) { 
     sel_station <- unique(dat_county()$station) 
   } else { sel_station <- input$selected_station }
@@ -175,11 +189,6 @@ dat_station <- reactive({
   dat_station <- dat_county() %>% 
     filter(
       station %in% sel_station)
-    #   ts_length_weeks >= input$min_ts_length
-    # ) %>%
-    # anti_join(
-    #   gaps_large, by = join_by(county, station, sensor_depth_at_low_tide_m)
-    # )
   
   return(dat_station) # use this to make the options in the depth dropdown
 })
